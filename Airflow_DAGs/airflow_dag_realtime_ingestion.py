@@ -1,7 +1,7 @@
 from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 
@@ -19,7 +19,7 @@ LAT = 28.6139
 LON = 77.2090
 
 default_args = {
-    "owner": "student",
+    "owner": "airflow",
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
@@ -36,7 +36,8 @@ with DAG(
     def get_current_hour_iso():
         """Returns the current hour in ISO format (e.g., 2024-11-22T14:00)"""
         # Open-Meteo returns time without seconds/timezone, so we format accordingly
-        now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+        # Updated to use datetime.now(timezone.utc) instead of the deprecated utcnow()
+        now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         return now.strftime("%Y-%m-%dT%H:%M")
     
     @task

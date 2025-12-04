@@ -14,13 +14,24 @@ TABLE_NAME = "RAW_AIRQUALITY_HISTORY"
 # Open-Meteo Air Quality API URL
 URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
+def get_dynamic_end_date():
+    """
+    Calculates the end date as today's date minus one hour 
+    to treat recent data as historical.
+    """
+    # Get current UTC time
+    now = datetime.utcnow()
+    # Subtract 1 hour to stay safely in the past
+    one_hour_ago = now - timedelta(hours=1)
+    # Format as YYYY-MM-DD string required by Open-Meteo API
+    return one_hour_ago.strftime('%Y-%m-%d')
+
 # --- UPDATED FOR DELHI, INDIA ---
-# Using start_date 2022-08-01 to maximize available data without hitting NULLs
 PARAMS = {
     "latitude": 28.6139,
     "longitude": 77.2090,
-    "start_date": "2022-08-01",  # Earliest valid data for Delhi
-    "end_date": "2024-12-31",
+    "start_date": "2022-09-01",        # Fixed Start Date as requested
+    "end_date": get_dynamic_end_date(), # Dynamic End Date (Today - 1 Hour)
     "hourly": ",".join([
         "pm10",
         "pm2_5",
@@ -28,7 +39,7 @@ PARAMS = {
         "nitrogen_dioxide",
         "ozone",
         "sulphur_dioxide",
-        "us_aqi",       # 0-500 Scale (Standard for India/US)
+        "us_aqi",       
         "uv_index",     
         "dust"          
     ]),
@@ -36,7 +47,7 @@ PARAMS = {
 }
 
 default_args = {
-    "owner": "student",
+    "owner": "airflow",
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
 }
@@ -47,7 +58,7 @@ with DAG(
     schedule="@once", 
     catchup=False,
     default_args=default_args,
-    description="Fetch ~2.5 years of Delhi Air Quality history and Load to Snowflake",
+    description="Fetch Delhi Air Quality history (2022 to Now) and Load to Snowflake",
 ) as dag:
 
     @task
@@ -55,8 +66,13 @@ with DAG(
         """
         Fetches hourly AQI data.
         """
-        print(f"Fetching AQI data from {URL} with params: {PARAMS}")
-        response = requests.get(URL, params=PARAMS)
+        # Recalculate end_date at runtime to ensure it is always fresh
+        current_params = PARAMS.copy()
+        current_params['end_date'] = get_dynamic_end_date()
+        
+        print(f"Fetching AQI data from {URL} with params: {current_params}")
+        
+        response = requests.get(URL, params=current_params)
         response.raise_for_status()
         data = response.json()
         
@@ -114,6 +130,7 @@ with DAG(
         try:
             print(f"Loading into {target_table}...")
             cur.execute("BEGIN")
+            # We truncate because this is a 'Historical Refresh' DAG
             cur.execute(f"TRUNCATE TABLE {target_table}")
             
             insert_sql = f"""

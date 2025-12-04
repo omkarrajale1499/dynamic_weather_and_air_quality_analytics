@@ -14,12 +14,24 @@ TABLE_NAME = "RAW_WEATHER_HISTORY"
 # Open-Meteo Archive API URL
 URL = "https://archive-api.open-meteo.com/v1/archive"
 
+def get_dynamic_end_date():
+    """
+    Calculates the end date as today's date minus one hour 
+    to treat recent data as historical.
+    """
+    # Get current UTC time
+    now = datetime.utcnow()
+    # Subtract 1 hour to stay safely in the past
+    one_hour_ago = now - timedelta(hours=1)
+    # Format as YYYY-MM-DD string required by Open-Meteo API
+    return one_hour_ago.strftime('%Y-%m-%d')
+
 # Delhi Coordinates & 5 Year History
 PARAMS = {
     "latitude": 28.6139,
     "longitude": 77.2090,
-    "start_date": "2020-01-01",
-    "end_date": "2024-12-31",
+    "start_date": "2022-09-01",        # Fixed Start Date as requested
+    "end_date": get_dynamic_end_date(), # Dynamic End Date (Today - 1 Hour)
     "hourly": ",".join([
         "temperature_2m",
         "relative_humidity_2m",
@@ -59,8 +71,13 @@ with DAG(
         Fetches 5 years of hourly data from Open-Meteo API.
         Returns a list of tuples ready for Snowflake insertion.
         """
-        print(f"Fetching data from {URL}...")
-        response = requests.get(URL, params=PARAMS)
+        # Recalculate end_date at runtime to ensure it is always fresh
+        current_params = PARAMS.copy()
+        current_params['end_date'] = get_dynamic_end_date()
+        
+        print(f"Fetching data from {URL} with params: {current_params}")
+        
+        response = requests.get(URL, params=current_params)
         response.raise_for_status()
         data = response.json()
         
