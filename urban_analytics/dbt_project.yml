@@ -1,0 +1,30 @@
+name: 'urban_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'urban_analytics'
+
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:         
+  - "target"
+  - "dbt_packages"
+
+
+models:
+  urban_analytics:
+    # Appplies to all files under models/staging
+    staging:
+      +materialized: view
+      +schema: STAGING
+    
+    # Applies to all files under models/marts
+    marts:
+      +materialized: table
+      +schema: ANALYTICS

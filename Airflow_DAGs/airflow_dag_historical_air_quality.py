@@ -2,7 +2,7 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 
@@ -14,7 +14,7 @@ TABLE_NAME = "RAW_AIRQUALITY_HISTORY"
 URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
 def get_dynamic_end_date():
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     one_hour_ago = now - timedelta(hours=1)
     return one_hour_ago.strftime('%Y-%m-%d')
 
@@ -24,7 +24,7 @@ PARAMS = {
     "start_date": "2022-09-01",
     "end_date": get_dynamic_end_date(),
     "hourly": "pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,ozone,sulphur_dioxide,us_aqi,uv_index,dust",
-    "timezone": "auto"
+    "timezone": "UTC"
 }
 
 default_args = {
@@ -36,22 +36,38 @@ default_args = {
 with DAG(
     dag_id="02_historical_air_quality_load",
     start_date=datetime(2024, 1, 1),
-    schedule=None, # Triggered by DAG 01
+    schedule=None, 
     catchup=False,
     default_args=default_args,
-    description="Fetch AQ history, load to Snowflake, then trigger Realtime DAG",
+    description="Fetch AQ history up to Current Hour - 1",
 ) as dag:
 
     @task
     def extract_air_quality_data():
         current_params = PARAMS.copy()
         current_params['end_date'] = get_dynamic_end_date()
+        
         print(f"Fetching AQI data from {URL} with params: {current_params}")
         response = requests.get(URL, params=current_params)
         response.raise_for_status()
         data = response.json()
-        hourly_data = data['hourly']
-        df = pd.DataFrame(hourly_data)
+        
+        df = pd.DataFrame(data['hourly'])
+        
+        # --- NEW LOGIC: Strict Hour Filtering ---
+        df['time'] = pd.to_datetime(df['time'], utc=True)
+        
+        # Calculate strict cutoff (Now - 1 Hour) as timezone-aware UTC
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        
+        print(f"Filtering data strictly before: {cutoff_time.isoformat()}")
+        
+        # Filter: Keep only rows strictly BEFORE the cutoff
+        df = df[df['time'] < cutoff_time]
+        
+        # Convert Timestamp back to string format for JSON serialization/Snowflake compatibility
+        # This fixes the "cannot serialize object of type Timestamp" error
+        df['time'] = df['time'].dt.strftime('%Y-%m-%dT%H:%M:%S')
         
         df.rename(columns={
             'time': 'OBSERVATION_TIME',
@@ -107,15 +123,12 @@ with DAG(
             cur.close()
             conn.close()
 
-    # --- Trigger Next DAG ---
     trigger_next = TriggerDagRunOperator(
         task_id="trigger_realtime_ingestion",
         trigger_dag_id="03_realtime_ingestion",
         wait_for_completion=False 
     )
 
-    # Dependencies
     aq_data = extract_air_quality_data()
     load_task = load_to_snowflake(aq_data)
-    
     load_task >> trigger_next

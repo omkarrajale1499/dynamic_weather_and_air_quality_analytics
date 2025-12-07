@@ -2,7 +2,7 @@ from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 
@@ -15,15 +15,12 @@ URL = "https://archive-api.open-meteo.com/v1/archive"
 
 def get_dynamic_end_date():
     """
-    Calculates the end date as today's date minus one hour 
-    to treat recent data as historical.
+    Calculates the end date string (YYYY-MM-DD) for the API request.
     """
-    # Get current UTC time
-    now = datetime.utcnow()
-    # Subtract 1 hour to stay safely in the past
-    one_hour_ago = now - timedelta(hours=1)
-    # Format as YYYY-MM-DD string required by Open-Meteo API
-    return one_hour_ago.strftime('%Y-%m-%d')
+    # Use timezone-aware UTC
+    now = datetime.now(timezone.utc)
+    # We still request "today" from the API to get the latest hours
+    return now.strftime('%Y-%m-%d')
 
 PARAMS = {
     "latitude": 28.6139,
@@ -31,7 +28,7 @@ PARAMS = {
     "start_date": "2022-09-01",
     "end_date": get_dynamic_end_date(),
     "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,precipitation,rain,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,is_day,shortwave_radiation",
-    "timezone": "auto"
+    "timezone": "UTC"  # Request UTC to make filtering easier
 }
 
 default_args = {
@@ -46,20 +43,41 @@ with DAG(
     schedule="@hourly", 
     catchup=False,
     default_args=default_args,
-    description="Fetch weather history, load to Snowflake, then trigger AQ DAG",
+    description="Fetch weather history up to Current Hour - 1",
 ) as dag:
     
     @task
     def extract_weather_data():
+        # 1. Setup Dates
         current_params = PARAMS.copy()
         current_params['end_date'] = get_dynamic_end_date()
+        
         print(f"Fetching data from {URL} with params: {current_params}")
         response = requests.get(URL, params=current_params)
         response.raise_for_status()
         data = response.json()
-        hourly_data = data['hourly']
-        df = pd.DataFrame(hourly_data)
         
+        # 2. Process DataFrame
+        df = pd.DataFrame(data['hourly'])
+        
+        # --- NEW LOGIC: Strict Hour Filtering ---
+        # Convert API time strings to datetime objects (UTC)
+        # utc=True ensures it is timezone aware (UTC)
+        df['time'] = pd.to_datetime(df['time'], utc=True)
+        
+        # Calculate strict cutoff (Now - 1 Hour) as timezone-aware UTC
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=1)
+        
+        print(f"Filtering data strictly before: {cutoff_time.isoformat()}")
+        
+        # Filter: Keep only rows strictly BEFORE the cutoff
+        df = df[df['time'] < cutoff_time]
+        
+        # Convert Timestamp back to string format for JSON serialization/Snowflake compatibility
+        # This fixes the "cannot serialize object of type Timestamp" error
+        df['time'] = df['time'].dt.strftime('%Y-%m-%dT%H:%M:%S')
+
+        # 3. Rename & Return
         df.rename(columns={
             'time': 'OBSERVATION_TIME',
             'temperature_2m': 'TEMPERATURE',
@@ -99,7 +117,10 @@ with DAG(
     
     @task
     def load_to_snowflake(rows):
-        if not rows: return
+        if not rows: 
+            print("No rows to load after filtering.")
+            return
+            
         hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
         conn = hook.get_conn()
         cur = conn.cursor()
@@ -123,15 +144,12 @@ with DAG(
             cur.close()
             conn.close()
 
-    # --- Trigger Next DAG ---
     trigger_next = TriggerDagRunOperator(
         task_id="trigger_historical_aq",
         trigger_dag_id="02_historical_air_quality_load",
-        wait_for_completion=False # Fire and forget
+        wait_for_completion=False 
     )
 
-    # Dependencies
     data = extract_weather_data()
     load_task = load_to_snowflake(data)
-    
     load_task >> trigger_next

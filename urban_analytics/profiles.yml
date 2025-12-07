@@ -1,0 +1,13 @@
+urban_analytics:
+  outputs:
+    dev:
+      account: SFEDU02-LVB17920
+      database: USER_DB_POODLE
+      password: Dipikarajale0302
+      role: TRAINING_ROLE
+      schema: STAGING
+      threads: 1
+      type: snowflake
+      user: POODLE
+      warehouse: POODLE_QUERY_WH
+  target: dev

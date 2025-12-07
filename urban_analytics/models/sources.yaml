@@ -1,0 +1,11 @@
+version: 2
+
+sources:
+  - name: open_meteo
+    database: USER_DB_POODLE
+    schema: RAW_DATA
+    tables:
+      - name: RAW_WEATHER_HISTORY
+      - name: RAW_WEATHER_REALTIME
+      - name: RAW_AIRQUALITY_HISTORY
+      - name: RAW_AIRQUALITY_REALTIME
