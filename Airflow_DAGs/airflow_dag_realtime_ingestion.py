@@ -30,13 +30,12 @@ with DAG(
     schedule="@hourly",  # Runs every hour
     catchup=False,
     default_args=default_args,
-    description="Fetch current hour Weather & AQI for Delhi and append to Snowflake",
+    description="Fetch current hour Weather & AQI for Delhi and perform Full Refresh in Snowflake",
 ) as dag:
     
     def get_current_hour_iso():
         """Returns the current hour in ISO format (e.g., 2024-11-22T14:00)"""
         # Open-Meteo returns time without seconds/timezone, so we format accordingly
-        # Updated to use datetime.now(timezone.utc) instead of the deprecated utcnow()
         now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
         return now.strftime("%Y-%m-%dT%H:%M")
     
@@ -126,8 +125,11 @@ with DAG(
         )]
 
     @task
-    def append_to_snowflake(weather_rows, aq_rows):
-        """Appends data to REALTIME tables (No Truncate)."""
+    def load_to_snowflake(weather_rows, aq_rows):
+        """
+        Performs a Full Refresh (Truncate + Insert) on REALTIME tables.
+        This ensures the table only holds the latest snapshot.
+        """
         hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
         conn = hook.get_conn()
         cur = conn.cursor()
@@ -135,7 +137,11 @@ with DAG(
         try:
             cur.execute("BEGIN")
             
-            # 1. Insert Weather
+            # --- WEATHER TABLE ---
+            # 1. Truncate (Wipe old data)
+            cur.execute(f"TRUNCATE TABLE {DB_NAME}.{SCHEMA_NAME}.RAW_WEATHER_REALTIME")
+            
+            # 2. Insert new data (if available)
             if weather_rows:
                 print(f"Inserting Weather for {weather_rows[0][0]}")
                 sql_weather = f"""
@@ -147,7 +153,11 @@ with DAG(
                 """
                 cur.executemany(sql_weather, weather_rows)
 
-            # 2. Insert AQI
+            # --- AIR QUALITY TABLE ---
+            # 1. Truncate (Wipe old data)
+            cur.execute(f"TRUNCATE TABLE {DB_NAME}.{SCHEMA_NAME}.RAW_AIRQUALITY_REALTIME")
+
+            # 2. Insert new data (if available)
             if aq_rows:
                 print(f"Inserting AQI for {aq_rows[0][0]}")
                 sql_aq = f"""
@@ -159,7 +169,7 @@ with DAG(
                 cur.executemany(sql_aq, aq_rows)
 
             cur.execute("COMMIT")
-            print("Real-time ingestion complete.")
+            print("Real-time Full Refresh complete.")
             
         except Exception as e:
             cur.execute("ROLLBACK")
@@ -172,4 +182,4 @@ with DAG(
     # Execution Flow
     current_weather = fetch_realtime_weather()
     current_aqi = fetch_realtime_aqi()
-    append_to_snowflake(current_weather, current_aqi)
+    load_to_snowflake(current_weather, current_aqi)

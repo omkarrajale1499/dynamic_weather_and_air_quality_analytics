@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.decorators import task
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from datetime import datetime, timedelta
 import requests
 import pandas as pd
@@ -10,8 +11,6 @@ SNOWFLAKE_CONN_ID = "snowflake_conn"
 DB_NAME = "USER_DB_POODLE"      
 SCHEMA_NAME = "RAW_DATA"
 TABLE_NAME = "RAW_WEATHER_HISTORY"
-
-# Open-Meteo Archive API URL
 URL = "https://archive-api.open-meteo.com/v1/archive"
 
 def get_dynamic_end_date():
@@ -26,27 +25,12 @@ def get_dynamic_end_date():
     # Format as YYYY-MM-DD string required by Open-Meteo API
     return one_hour_ago.strftime('%Y-%m-%d')
 
-# Delhi Coordinates & 5 Year History
 PARAMS = {
     "latitude": 28.6139,
     "longitude": 77.2090,
-    "start_date": "2022-09-01",        # Fixed Start Date as requested
-    "end_date": get_dynamic_end_date(), # Dynamic End Date (Today - 1 Hour)
-    "hourly": ",".join([
-        "temperature_2m",
-        "relative_humidity_2m",
-        "dew_point_2m",
-        "apparent_temperature",
-        "precipitation",
-        "rain",
-        "cloud_cover",
-        "wind_speed_10m",
-        "wind_gusts_10m",
-        "wind_direction_10m",
-        "pressure_msl",
-        "is_day",
-        "shortwave_radiation"
-    ]),
+    "start_date": "2022-09-01",
+    "end_date": get_dynamic_end_date(),
+    "hourly": "temperature_2m,relative_humidity_2m,dew_point_2m,apparent_temperature,precipitation,rain,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,is_day,shortwave_radiation",
     "timezone": "auto"
 }
 
@@ -59,34 +43,23 @@ default_args = {
 with DAG(
     dag_id="01_historical_weather_load",
     start_date=datetime(2024, 1, 1),
-    schedule="@once",  # Runs only once when triggered manually
+    schedule="@hourly", 
     catchup=False,
     default_args=default_args,
-    description="Fetch 5 years of Delhi weather history and Load to Snowflake",
+    description="Fetch weather history, load to Snowflake, then trigger AQ DAG",
 ) as dag:
     
     @task
     def extract_weather_data():
-        """
-        Fetches 5 years of hourly data from Open-Meteo API.
-        Returns a list of tuples ready for Snowflake insertion.
-        """
-        # Recalculate end_date at runtime to ensure it is always fresh
         current_params = PARAMS.copy()
         current_params['end_date'] = get_dynamic_end_date()
-        
         print(f"Fetching data from {URL} with params: {current_params}")
-        
         response = requests.get(URL, params=current_params)
         response.raise_for_status()
         data = response.json()
-        
-        # API returns column-oriented 'hourly' data
         hourly_data = data['hourly']
-        
         df = pd.DataFrame(hourly_data)
         
-        # Map API column names to Database column names
         df.rename(columns={
             'time': 'OBSERVATION_TIME',
             'temperature_2m': 'TEMPERATURE',
@@ -104,9 +77,6 @@ with DAG(
             'shortwave_radiation': 'SOLAR_RADIATION'
         }, inplace=True)
         
-        print(f"Extracted {len(df)} rows.")
-        
-        # Convert to list of tuples, handling NaNs
         rows = []
         for record in df.itertuples(index=False):
             rows.append((
@@ -125,53 +95,43 @@ with DAG(
                 int(record.IS_DAY_FLAG) if pd.notna(record.IS_DAY_FLAG) else None,
                 float(record.SOLAR_RADIATION) if pd.notna(record.SOLAR_RADIATION) else None
             ))
-            
         return rows
     
     @task
     def load_to_snowflake(rows):
-        """
-        Performs a Full Refresh (Truncate + Insert).
-        """
-        if not rows:
-            print("No data to load.")
-            return
-
+        if not rows: return
         hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
         conn = hook.get_conn()
         cur = conn.cursor()
-        
-        target_table = f"{DB_NAME}.{SCHEMA_NAME}.{TABLE_NAME}"
-        
         try:
-            print(f"Loading into {target_table}...")
             cur.execute("BEGIN")
-            
-            # 1. Truncate old data
-            cur.execute(f"TRUNCATE TABLE {target_table}")
-            
-            # 2. Insert new data
+            cur.execute(f"TRUNCATE TABLE {DB_NAME}.{SCHEMA_NAME}.{TABLE_NAME}")
             insert_sql = f"""
-            INSERT INTO {target_table} (
+            INSERT INTO {DB_NAME}.{SCHEMA_NAME}.{TABLE_NAME} (
                 OBSERVATION_TIME, TEMPERATURE, HUMIDITY, DEW_POINT, FEELS_LIKE_TEMP,
                 PRECIPITATION_TOTAL, RAIN, CLOUD_COVER, WIND_SPEED, WIND_GUSTS,
                 WIND_DIRECTION, PRESSURE, IS_DAY_FLAG, SOLAR_RADIATION
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            
             cur.executemany(insert_sql, rows)
             cur.execute("COMMIT")
-            print(f"Successfully loaded {len(rows)} rows.")
-            
         except Exception as e:
             cur.execute("ROLLBACK")
-            print(f"Error: {e}")
             raise
         finally:
             cur.close()
             conn.close()
 
-    # Pipeline Execution
+    # --- Trigger Next DAG ---
+    trigger_next = TriggerDagRunOperator(
+        task_id="trigger_historical_aq",
+        trigger_dag_id="02_historical_air_quality_load",
+        wait_for_completion=False # Fire and forget
+    )
+
+    # Dependencies
     data = extract_weather_data()
-    load_to_snowflake(data)
+    load_task = load_to_snowflake(data)
+    
+    load_task >> trigger_next
