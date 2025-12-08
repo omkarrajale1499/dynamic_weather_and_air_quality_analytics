@@ -1,18 +1,20 @@
 from airflow import DAG
 from airflow.decorators import task
+from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from datetime import datetime, timedelta, timezone
 import requests
 import pandas as pd
 
 # --- Configuration ---
 SNOWFLAKE_CONN_ID = "snowflake_conn"
-DB_NAME = "USER_DB_POODLE"
-SCHEMA_NAME = "RAW_DATA"
+DB_NAME = Variable.get('snowflake_db')
+SCHEMA_NAME = Variable.get('snowflake_raw_schema')
 
 # Endpoints for Live/Forecast Data
-WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
-AQ_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+WEATHER_URL = Variable.get('open_meteo_real_time_weather_api')
+AQ_URL = Variable.get('open_meteo_air_quality_api')
 
 # Coordinates for New Delhi
 LAT = 28.6139
@@ -179,7 +181,14 @@ with DAG(
             cur.close()
             conn.close()
 
+    trigger_next = TriggerDagRunOperator(
+        task_id="trigger_dbt_transformation",
+        trigger_dag_id="04_dbt_transformation",
+        wait_for_completion=False 
+    )        
+
     # Execution Flow
     current_weather = fetch_realtime_weather()
     current_aqi = fetch_realtime_aqi()
-    load_to_snowflake(current_weather, current_aqi)
+    load_task = load_to_snowflake(current_weather, current_aqi)
+    load_task >> trigger_next

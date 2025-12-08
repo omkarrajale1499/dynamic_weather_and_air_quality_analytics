@@ -1,5 +1,6 @@
 from airflow import DAG
 from airflow.decorators import task
+from airflow.models import Variable
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from datetime import datetime, timedelta, timezone
@@ -8,10 +9,10 @@ import pandas as pd
 
 # --- Configuration ---
 SNOWFLAKE_CONN_ID = "snowflake_conn"
-DB_NAME = "USER_DB_POODLE"      
-SCHEMA_NAME = "RAW_DATA"
-TABLE_NAME = "RAW_AIRQUALITY_HISTORY"
-URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
+DB_NAME = Variable.get('snowflake_db')    
+SCHEMA_NAME = Variable.get('snowflake_raw_schema')
+TABLE_NAME = Variable.get('snowflake_raw_table_airquality')
+URL = Variable.get('open_meteo_air_quality_api')
 
 def get_dynamic_end_date():
     now = datetime.now(timezone.utc)
