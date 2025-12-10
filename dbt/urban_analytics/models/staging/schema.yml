@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_weather
+    description: "Unified Weather Data (History + Realtime)"
+    columns:
+      - name: OBSERVATION_TIME
+        description: "Primary Key"
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_airquality
+    description: "Unified Air Quality Data (History + Realtime)"
+    columns:
+      - name: OBSERVATION_TIME
+        description: "Primary Key"
+        tests:
+          - unique
+          - not_null
