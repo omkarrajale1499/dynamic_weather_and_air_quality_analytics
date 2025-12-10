@@ -16,7 +16,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="07_anomaly_detection_pipeline",
+    dag_id="06_anomaly_detection_pipeline",
     start_date=datetime(2024, 1, 1),
     schedule=None, # Triggered by DAG 04
     catchup=False,
@@ -49,7 +49,7 @@ with DAG(
             # Detect
             print("Running Detection...")
             cur.execute(f"""
-                CREATE OR REPLACE TABLE {DB_NAME}.STAGING_ANALYTICS.REALTIME_ANOMALY_PREDS AS
+                CREATE OR REPLACE TABLE {DB_NAME}.ANALYTICS.REALTIME_ANOMALY_PREDS AS
                 SELECT *, PERCENTILE as ANOMALY_SCORE 
                 FROM TABLE(ANOMALY_DETECTION_MODEL!DETECT_ANOMALIES(
                     INPUT_DATA => SYSTEM$REFERENCE('TABLE', '{DB_NAME}.STAGING_ANALYTICS.MART_ML_ANOMALY_INFERENCE'),
@@ -58,6 +58,8 @@ with DAG(
                     CONFIG_OBJECT => {{'prediction_interval': 0.95}}
                 ))
             """)
+
+    
         finally:
             cur.close()
             conn.close()

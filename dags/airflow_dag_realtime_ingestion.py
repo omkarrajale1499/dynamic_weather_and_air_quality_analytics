@@ -29,7 +29,7 @@ default_args = {
 with DAG(
     dag_id="03_realtime_ingestion",
     start_date=datetime(2024, 1, 1),
-    schedule="@hourly",  # Runs every hour
+    schedule=None,  # Runs every hour
     catchup=False,
     default_args=default_args,
     description="Fetch current hour Weather & AQI for Delhi and perform Full Refresh in Snowflake",

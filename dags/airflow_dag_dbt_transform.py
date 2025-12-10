@@ -41,13 +41,13 @@ with DAG(
     # Once data is transformed, kick off the ML pipelines in parallel
     trigger_anomaly = TriggerDagRunOperator(
         task_id="trigger_anomaly_detection",
-        trigger_dag_id="07_anomaly_detection_pipeline",
+        trigger_dag_id="06_anomaly_detection_pipeline",
         wait_for_completion=False
     )
 
     trigger_classification = TriggerDagRunOperator(
         task_id="trigger_aqi_classification",
-        trigger_dag_id="06_ml_classification_pipeline",
+        trigger_dag_id="05_ml_classification_pipeline",
         wait_for_completion=False
     )
 

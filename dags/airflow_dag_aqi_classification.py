@@ -16,7 +16,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="06_ml_classification_pipeline",
+    dag_id="05_ml_classification_pipeline",
     start_date=datetime(2024, 1, 1),
     schedule=None, # Triggered by DAG 04
     catchup=False,
@@ -63,6 +63,25 @@ with DAG(
                             {{'ON_ERROR': 'SKIP'}}
                         ) as PREDICTION_RESULT
                     FROM {DB_NAME}.STAGING_ANALYTICS.MART_ML_CLASSIFICATION_INFERENCE
+                )
+            """)
+
+            cur.execute(f"""
+                CREATE OR REPLACE TABLE {DB_NAME}.STAGING_ANALYTICS.FINAL_PREDICTION_HISTORICAL AS
+                SELECT 
+                    OBSERVATION_TIME,
+                    PREDICTION_RESULT:class::STRING as PREDICTED_CLASS,
+                    PREDICTION_RESULT:probability:Good::FLOAT as PROB_GOOD,
+                    PREDICTION_RESULT:probability:Moderate::FLOAT as PROB_MODERATE,
+                    PREDICTION_RESULT:probability:Poor::FLOAT as PROB_POOR
+                FROM (
+                    SELECT 
+                        OBSERVATION_TIME,
+                        AQI_CLASSIFIER_MODEL!PREDICT(
+                            OBJECT_CONSTRUCT(*),
+                            {{'ON_ERROR': 'SKIP'}}
+                        ) as PREDICTION_RESULT
+                    FROM {DB_NAME}.STAGING_ANALYTICS.MART_ML_CLASSIFICATION_TRAINING
                 )
             """)
         finally:
