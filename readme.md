@@ -146,6 +146,12 @@ The dashboard includes:
 Dashboard file:  
 `weather-airquality-analytics.pbix`
 
+Real-Time Air Quality Dashboard
+<img width="1323" height="737" alt="Dashboard-2" src="https://github.com/user-attachments/assets/f41716f5-4e67-4193-96f2-b0718f32b04c" />
+
+Historical Drivers of Air Pollution
+<img width="1325" height="745" alt="Screenshot (209)" src="https://github.com/user-attachments/assets/a3dd8afb-5719-4ba3-bfbb-b5e7fac597af" />
+
 ---
 
 ## 9. Running the Project Locally
